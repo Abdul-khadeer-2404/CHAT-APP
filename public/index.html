@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Chat App</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Login Form -->
+        <div id="loginForm" class="login-form">
+            <h2>Join Chat Room</h2>
+            <input type="text" id="usernameInput" placeholder="Enter your username" maxlength="20">
+            <button id="joinBtn">Join Chat</button>
+        </div>
+
+        <!-- Chat Interface -->
+        <div id="chatInterface" class="chat-interface hidden">
+            <div class="chat-header">
+                <h2>Real-Time Chat</h2>
+                <div class="user-info">
+                    <span>Welcome, <strong id="currentUser"></strong></span>
+                    <button id="leaveBtn">Leave Chat</button>
+                </div>
+            </div>
+
+            <div class="chat-container">
+                <div class="sidebar">
+                    <h3>Online Users</h3>
+                    <ul id="usersList"></ul>
+                </div>
+
+                <div class="chat-main">
+                    <div id="messages" class="messages"></div>
+                    <div id="typingIndicator" class="typing-indicator"></div>
+                    
+                    <!-- File Preview -->
+                    <div id="filePreview" class="file-preview hidden">
+                        <div class="preview-content">
+                            <img id="previewImage" class="preview-image" style="display: none;">
+                            <div class="file-details">
+                                <span id="fileName" class="file-name"></span>
+                                <span id="fileSize" class="file-size"></span>
+                            </div>
+                            <button id="cancelFileBtn" class="cancel-file-btn">✕</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Upload Progress -->
+                    <div id="uploadProgress" class="upload-progress hidden">
+                        <div class="progress-bar">
+                            <div class="progress-text">Uploading file...</div>
+                        </div>
+                    </div>
+
+                    <div class="message-input">
+                        <input type="file" id="fileInput" style="display: none;" accept="image/*,video/*,.pdf,.doc,.docx,.txt,.zip,.rar">
+                        <button id="fileBtn" class="file-btn" title="Attach file">
+                            <i class="fas fa-paperclip"></i>
+                        </button>
+                        <input type="text" id="messageInput" placeholder="Type your message..." maxlength="500">
+                        <button id="sendBtn">Send</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Socket.IO Client -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
