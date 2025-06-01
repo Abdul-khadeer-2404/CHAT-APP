@@ -17,6 +17,15 @@ const io = socketIO(server, {
     }
 });
 
+// Health check endpoint for Railway deployment verification
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        timestamp: new Date().toISOString(),
+        port: process.env.PORT || 3000
+    });
+});
+
 // Security middleware
 app.use(helmet({
     contentSecurityPolicy: {
@@ -33,16 +42,16 @@ app.use(helmet({
 
 // Rate limiting
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
+    windowMs: 15 * 60 * 1000,
+    max: 100,
     message: 'Too many requests from this IP, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
 });
 
 const uploadLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10, // limit each IP to 10 uploads per windowMs
+    windowMs: 15 * 60 * 1000,
+    max: 10,
     message: 'Too many file uploads, please try again later.',
 });
 
@@ -50,8 +59,8 @@ app.use(limiter);
 
 // Message rate limiting per socket
 const messageLimiter = new Map();
-const MESSAGE_LIMIT = 30; // messages per minute
-const MESSAGE_WINDOW = 60 * 1000; // 1 minute
+const MESSAGE_LIMIT = 30;
+const MESSAGE_WINDOW = 60 * 1000;
 
 function checkMessageRate(socketId) {
     const now = Date.now();
@@ -72,7 +81,6 @@ function checkMessageRate(socketId) {
 function validateUsername(username) {
     if (!username || typeof username !== 'string') return false;
     if (username.length < 2 || username.length > 20) return false;
-    // Allow only alphanumeric characters, spaces, and basic punctuation
     const validPattern = /^[a-zA-Z0-9\s\-_\.]+$/;
     return validPattern.test(username);
 }
@@ -84,37 +92,36 @@ function validateMessage(message) {
 }
 
 function sanitizeMessage(message) {
-    // Remove XSS attempts and sanitize HTML
     return xss(message, {
-        whiteList: {}, // No HTML tags allowed
+        whiteList: {},
         stripIgnoreTag: true,
         stripIgnoreTagBody: ['script']
     });
 }
 
-// Create uploads directory if it doesn't exist
+// Create uploads directory with error handling for Railway
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
+try {
+    if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+} catch (error) {
+    console.warn('Could not create uploads directory:', error.message);
 }
 
 // Enhanced file validation
 const ALLOWED_MIME_TYPES = {
-    // Images
     'image/jpeg': ['.jpg', '.jpeg'],
     'image/png': ['.png'],
     'image/gif': ['.gif'],
     'image/webp': ['.webp'],
-    // Videos
     'video/mp4': ['.mp4'],
     'video/webm': ['.webm'],
     'video/quicktime': ['.mov'],
-    // Documents
     'application/pdf': ['.pdf'],
     'text/plain': ['.txt'],
     'application/msword': ['.doc'],
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
-    // Archives
     'application/zip': ['.zip'],
     'application/x-rar-compressed': ['.rar']
 };
@@ -127,13 +134,20 @@ function validateFileType(file) {
     return allowedExtensions.includes(fileExtension);
 }
 
-// Configure multer for file uploads
+// Configure multer for file uploads with Railway compatibility
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, uploadsDir);
+        try {
+            if (!fs.existsSync(uploadsDir)) {
+                fs.mkdirSync(uploadsDir, { recursive: true });
+            }
+            cb(null, uploadsDir);
+        } catch (error) {
+            console.error('Upload directory error:', error);
+            cb(error);
+        }
     },
     filename: (req, file, cb) => {
-        // Generate secure filename
         const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9\-_.]/g, '');
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         const extension = path.extname(sanitizedName);
@@ -144,17 +158,15 @@ const storage = multer.diskStorage({
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 10 * 1024 * 1024, // Reduced to 10MB for better security
+        fileSize: 10 * 1024 * 1024,
         files: 1,
-        fieldSize: 1024 * 1024, // 1MB field size limit
+        fieldSize: 1024 * 1024,
     },
     fileFilter: (req, file, cb) => {
-        // Validate file type
         if (!validateFileType(file)) {
             return cb(new Error('Invalid file type'));
         }
         
-        // Check filename length
         if (file.originalname.length > 100) {
             return cb(new Error('Filename too long'));
         }
@@ -163,10 +175,10 @@ const upload = multer({
     }
 });
 
-// Serve static files from public directory
+// Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// File upload endpoint with additional security
+// File upload endpoint with Railway error handling
 app.post('/upload', uploadLimiter, upload.single('file'), (req, res) => {
     try {
         if (!req.file) {
@@ -175,7 +187,7 @@ app.post('/upload', uploadLimiter, upload.single('file'), (req, res) => {
 
         const fileInfo = {
             filename: req.file.filename,
-            originalname: path.basename(req.file.originalname), // Remove directory traversal
+            originalname: path.basename(req.file.originalname),
             mimetype: req.file.mimetype,
             size: req.file.size,
             url: `/uploads/${req.file.filename}`
@@ -188,7 +200,7 @@ app.post('/upload', uploadLimiter, upload.single('file'), (req, res) => {
     }
 });
 
-// Store connected users with additional info
+// Store connected users
 const users = new Map();
 const BANNED_USERNAMES = ['admin', 'moderator', 'system', 'bot', 'null', 'undefined'];
 
@@ -198,20 +210,16 @@ io.on('connection', (socket) => {
     
     let connectionValidated = false;
     
-    // Timeout for connection validation
     const validationTimeout = setTimeout(() => {
         if (!connectionValidated) {
             socket.disconnect(true);
         }
-    }, 30000); // 30 seconds to validate
+    }, 30000);
 
-    // Handle user joining with validation
     socket.on('join', (username) => {
         try {
-            // Clear validation timeout
             clearTimeout(validationTimeout);
             
-            // Validate username
             if (!validateUsername(username)) {
                 socket.emit('error', 'Invalid username');
                 return;
@@ -219,13 +227,11 @@ io.on('connection', (socket) => {
             
             const cleanUsername = sanitizeMessage(username.trim());
             
-            // Check for banned usernames
             if (BANNED_USERNAMES.includes(cleanUsername.toLowerCase())) {
                 socket.emit('error', 'Username not allowed');
                 return;
             }
             
-            // Check if username already exists
             const existingUsers = Array.from(users.values());
             if (existingUsers.some(user => user.username.toLowerCase() === cleanUsername.toLowerCase())) {
                 socket.emit('error', 'Username already taken');
@@ -245,7 +251,6 @@ io.on('connection', (socket) => {
                 timestamp: new Date().toLocaleTimeString()
             });
             
-            // Send current users list to all clients
             io.emit('users list', Array.from(users.values()).map(user => user.username));
             console.log(`${cleanUsername} joined the chat`);
         } catch (error) {
@@ -254,7 +259,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle chat messages with enhanced security
     socket.on('chat message', (data) => {
         try {
             const userInfo = users.get(socket.id);
@@ -262,13 +266,11 @@ io.on('connection', (socket) => {
                 return;
             }
             
-            // Rate limiting
             if (!checkMessageRate(socket.id)) {
                 socket.emit('error', 'Too many messages. Please slow down.');
                 return;
             }
             
-            // Validate message
             if (!validateMessage(data.message)) {
                 socket.emit('error', 'Invalid message');
                 return;
@@ -276,7 +278,6 @@ io.on('connection', (socket) => {
             
             const sanitizedMessage = sanitizeMessage(data.message);
             
-            // Update user message count
             userInfo.messageCount++;
             
             io.emit('chat message', {
@@ -292,7 +293,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle file messages
     socket.on('file message', (data) => {
         try {
             const userInfo = users.get(socket.id);
@@ -300,19 +300,16 @@ io.on('connection', (socket) => {
                 return;
             }
             
-            // Rate limiting for file messages
             if (!checkMessageRate(socket.id)) {
                 socket.emit('error', 'Too many messages. Please slow down.');
                 return;
             }
             
-            // Validate optional message
             let sanitizedMessage = '';
             if (data.message && validateMessage(data.message)) {
                 sanitizedMessage = sanitizeMessage(data.message);
             }
             
-            // Basic file validation
             if (!data.file || !data.file.filename || !data.file.url) {
                 socket.emit('error', 'Invalid file data');
                 return;
@@ -333,7 +330,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle typing indicators with rate limiting
     socket.on('typing', () => {
         const userInfo = users.get(socket.id);
         if (userInfo && connectionValidated) {
@@ -347,7 +343,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle user disconnect
     socket.on('disconnect', () => {
         const userInfo = users.get(socket.id);
         if (userInfo) {
@@ -360,7 +355,6 @@ io.on('connection', (socket) => {
                 timestamp: new Date().toLocaleTimeString()
             });
             
-            // Send updated users list to all clients
             io.emit('users list', Array.from(users.values()).map(user => user.username));
             console.log(`${userInfo.username} left the chat`);
         }
@@ -382,31 +376,52 @@ app.use((error, req, res, next) => {
     res.status(500).json({ error: 'Server error occurred' });
 });
 
-// Cleanup old uploaded files (run every hour)
-setInterval(() => {
-    const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-    const now = Date.now();
-    
-    fs.readdir(uploadsDir, (err, files) => {
-        if (err) return;
+// Cleanup old files (only if uploads directory exists)
+const cleanupInterval = setInterval(() => {
+    try {
+        if (!fs.existsSync(uploadsDir)) return;
         
-        files.forEach(file => {
-            const filePath = path.join(uploadsDir, file);
-            fs.stat(filePath, (err, stats) => {
-                if (err) return;
-                
-                if (now - stats.mtime.getTime() > maxAge) {
-                    fs.unlink(filePath, (err) => {
-                        if (!err) console.log(`Cleaned up old file: ${file}`);
-                    });
-                }
+        const maxAge = 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        
+        fs.readdir(uploadsDir, (err, files) => {
+            if (err) return;
+            
+            files.forEach(file => {
+                const filePath = path.join(uploadsDir, file);
+                fs.stat(filePath, (err, stats) => {
+                    if (err) return;
+                    
+                    if (now - stats.mtime.getTime() > maxAge) {
+                        fs.unlink(filePath, (err) => {
+                            if (!err) console.log(`Cleaned up old file: ${file}`);
+                        });
+                    }
+                });
             });
         });
-    });
-}, 60 * 60 * 1000); // Run every hour
+    } catch (error) {
+        console.error('Cleanup error:', error);
+    }
+}, 60 * 60 * 1000);
 
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down gracefully');
+    clearInterval(cleanupInterval);
+    server.close(() => {
+        console.log('Server closed');
+        process.exit(0);
+    });
+});
+
+// Start server with proper error handling
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', (err) => {
+    if (err) {
+        console.error('Failed to start server:', err);
+        process.exit(1);
+    }
     console.log(`Server running on port ${PORT}`);
-    console.log(`Visit http://localhost:${PORT} to access the chat`);
+    console.log(`Health check: http://localhost:${PORT}/health`);
 });
