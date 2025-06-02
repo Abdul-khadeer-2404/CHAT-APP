@@ -1,5 +1,14 @@
-// Initialize socket connection
-const socket = io();
+// Updated Socket.IO client configuration for Railway deployment
+const socket = io({
+    transports: ['websocket', 'polling'],
+    upgrade: true, // Enable upgrade to websocket
+    timeout: 20000,
+    reconnection: true,
+    reconnectionDelay: 1000,
+    reconnectionAttempts: 5,
+    // Remove forceNew: true - this can cause issues
+    autoConnect: true
+});
 
 // DOM elements
 const loginForm = document.getElementById('loginForm');
@@ -24,6 +33,31 @@ let username = '';
 let isTyping = false;
 let typingTimer;
 let selectedFile = null;
+let connectionRetries = 0;
+const maxRetries = 3;
+
+// Connection status indicator
+function showConnectionStatus(status, message) {
+    const statusDiv = document.getElementById('connectionStatus') || createConnectionStatusDiv();
+    statusDiv.className = `connection-status ${status}`;
+    statusDiv.textContent = message;
+    
+    if (status === 'connected') {
+        setTimeout(() => {
+            statusDiv.style.display = 'none';
+        }, 3000);
+    } else {
+        statusDiv.style.display = 'block';
+    }
+}
+
+function createConnectionStatusDiv() {
+    const statusDiv = document.createElement('div');
+    statusDiv.id = 'connectionStatus';
+    statusDiv.className = 'connection-status';
+    document.body.insertBefore(statusDiv, document.body.firstChild);
+    return statusDiv;
+}
 
 // Event listeners
 joinBtn.addEventListener('click', joinChat);
@@ -52,6 +86,28 @@ function joinChat() {
         return;
     }
     
+    // Check if socket is connected
+    if (!socket.connected) {
+        showConnectionStatus('connecting', 'Connecting to server...');
+        socket.connect();
+        
+        // Wait for connection before joining
+        const connectionTimeout = setTimeout(() => {
+            showConnectionStatus('error', 'Failed to connect to server. Please check your connection.');
+        }, 10000);
+        
+        socket.once('connect', () => {
+            clearTimeout(connectionTimeout);
+            proceedWithJoin(inputUsername);
+        });
+        
+        return;
+    }
+    
+    proceedWithJoin(inputUsername);
+}
+
+function proceedWithJoin(inputUsername) {
     username = inputUsername;
     socket.emit('join', username);
     
@@ -75,9 +131,9 @@ function handleFileSelect(e) {
     const file = e.target.files[0];
     if (!file) return;
 
-    // Check file size (50MB limit)
-    if (file.size > 50 * 1024 * 1024) {
-        alert('File size must be less than 50MB');
+    // Check file size (10MB limit as per server config)
+    if (file.size > 10 * 1024 * 1024) {
+        alert('File size must be less than 10MB');
         return;
     }
 
@@ -118,7 +174,7 @@ function cancelFileSelection() {
     messageInput.placeholder = 'Type your message...';
 }
 
-// Upload file
+// Upload file with better error handling
 async function uploadFile(file) {
     const formData = new FormData();
     formData.append('file', file);
@@ -126,10 +182,15 @@ async function uploadFile(file) {
     try {
         uploadProgress.classList.remove('hidden');
         
-        const response = await fetch('/upload', {
+        // Use relative URL to avoid DNS issues
+        const response = await fetch('./upload', {
             method: 'POST',
             body: formData
         });
+
+        if (!response.ok) {
+            throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+        }
 
         const result = await response.json();
         
@@ -152,6 +213,13 @@ async function sendMessage() {
     const message = messageInput.value.trim();
     
     if (!selectedFile && message === '') return;
+    
+    // Check connection before sending
+    if (!socket.connected) {
+        showConnectionStatus('error', 'Not connected to server. Trying to reconnect...');
+        socket.connect();
+        return;
+    }
 
     // Disable send button during upload
     sendBtn.disabled = true;
@@ -197,6 +265,8 @@ function handleMessageInput(e) {
 
 // Handle typing indicator
 function handleTyping() {
+    if (!socket.connected) return;
+    
     if (!isTyping) {
         isTyping = true;
         socket.emit('typing');
@@ -354,7 +424,7 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Socket event listeners
+// Socket event listeners with better error handling
 socket.on('chat message', (data) => {
     displayMessage(data);
 });
@@ -381,16 +451,47 @@ socket.on('user stop typing', () => {
 
 socket.on('connect', () => {
     console.log('Connected to server');
+    showConnectionStatus('connected', 'Connected to server');
+    connectionRetries = 0;
 });
 
-socket.on('disconnect', () => {
-    console.log('Disconnected from server');
-    if (!loginForm.classList.contains('hidden')) {
-        alert('Connection lost. Please refresh the page.');
+socket.on('disconnect', (reason) => {
+    console.log('Disconnected from server:', reason);
+    showConnectionStatus('disconnected', 'Disconnected from server');
+    
+    // Auto-reconnect for certain disconnect reasons
+    if (reason === 'io server disconnect') {
+        // Server initiated disconnect, don't reconnect automatically
+        showConnectionStatus('error', 'Server disconnected. Please refresh the page.');
     }
+});
+
+socket.on('connect_error', (error) => {
+    console.error('Connection error:', error);
+    connectionRetries++;
+    
+    if (connectionRetries <= maxRetries) {
+        showConnectionStatus('error', `Connection failed. Retrying... (${connectionRetries}/${maxRetries})`);
+    } else {
+        showConnectionStatus('error', 'Unable to connect to server. Please check your connection and refresh the page.');
+    }
+});
+
+socket.on('reconnect', (attemptNumber) => {
+    console.log('Reconnected after', attemptNumber, 'attempts');
+    showConnectionStatus('connected', 'Reconnected to server');
+});
+
+socket.on('error', (message) => {
+    alert(message);
 });
 
 // Focus username input on page load
 window.addEventListener('load', () => {
     usernameInput.focus();
+    
+    // Check initial connection
+    if (!socket.connected) {
+        showConnectionStatus('connecting', 'Connecting to server...');
+    }
 });

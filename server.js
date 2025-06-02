@@ -10,29 +10,28 @@ const xss = require('xss');
 
 const app = express();
 const server = http.createServer(app);
+
+// Updated Socket.IO configuration for Railway
 const io = socketIO(server, {
     cors: {
-        origin: process.env.NODE_ENV === 'production' ? false : ["http://localhost:3000"],
-        methods: ["GET", "POST"]
-    }
+        origin: "*", // Allow all origins for Railway
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    transports: ['websocket', 'polling'],
+    allowEIO3: true,
+    connectTimeout: 60000,
+    pingTimeout: 60000,
+    pingInterval: 25000
 });
 
-// Health check endpoint for Railway deployment verification
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'OK', 
-        timestamp: new Date().toISOString(),
-        port: process.env.PORT || 3000
-    });
-});
-
-// Security middleware
+// Security middleware - Updated for Railway
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
-            scriptSrc: ["'self'", "https://cdnjs.cloudflare.com"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
             imgSrc: ["'self'", "data:", "blob:"],
             fontSrc: ["'self'", "https://cdnjs.cloudflare.com"],
             connectSrc: ["'self'", "ws:", "wss:"],
@@ -56,6 +55,44 @@ const uploadLimiter = rateLimit({
 });
 
 app.use(limiter);
+
+// Middleware to parse JSON
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Create public directory structure
+const publicDir = path.join(__dirname, 'public');
+const uploadsDir = path.join(publicDir, 'uploads');
+
+// Ensure directories exist
+[publicDir, uploadsDir].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+        try {
+            fs.mkdirSync(dir, { recursive: true });
+            console.log(`Created directory: ${dir}`);
+        } catch (error) {
+            console.warn(`Could not create directory ${dir}:`, error.message);
+        }
+    }
+});
+
+// Serve static files - IMPORTANT: This must come before other routes
+app.use(express.static(publicDir));
+app.use('/uploads', express.static(uploadsDir));
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        timestamp: new Date().toISOString(),
+        port: process.env.PORT || 3000
+    });
+});
+
+// ROOT ROUTE - This was missing!
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
 
 // Message rate limiting per socket
 const messageLimiter = new Map();
@@ -99,16 +136,6 @@ function sanitizeMessage(message) {
     });
 }
 
-// Create uploads directory with error handling for Railway
-const uploadsDir = path.join(__dirname, 'public', 'uploads');
-try {
-    if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-} catch (error) {
-    console.warn('Could not create uploads directory:', error.message);
-}
-
 // Enhanced file validation
 const ALLOWED_MIME_TYPES = {
     'image/jpeg': ['.jpg', '.jpeg'],
@@ -134,7 +161,7 @@ function validateFileType(file) {
     return allowedExtensions.includes(fileExtension);
 }
 
-// Configure multer for file uploads with Railway compatibility
+// Configure multer for file uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         try {
@@ -175,10 +202,7 @@ const upload = multer({
     }
 });
 
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
-
-// File upload endpoint with Railway error handling
+// File upload endpoint
 app.post('/upload', uploadLimiter, upload.single('file'), (req, res) => {
     try {
         if (!req.file) {
@@ -376,7 +400,7 @@ app.use((error, req, res, next) => {
     res.status(500).json({ error: 'Server error occurred' });
 });
 
-// Cleanup old files (only if uploads directory exists)
+// Cleanup old files
 const cleanupInterval = setInterval(() => {
     try {
         if (!fs.existsSync(uploadsDir)) return;
@@ -415,7 +439,7 @@ process.on('SIGTERM', () => {
     });
 });
 
-// Start server with proper error handling
+// Start server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', (err) => {
     if (err) {
@@ -423,5 +447,6 @@ server.listen(PORT, '0.0.0.0', (err) => {
         process.exit(1);
     }
     console.log(`Server running on port ${PORT}`);
+    console.log(`Chat app: http://localhost:${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/health`);
 });
